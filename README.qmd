@@ -1,0 +1,61 @@
+---
+title: "README"
+author: "Michal Rackiewicz"
+format: gfm
+editor: visual
+---
+
+This dataset contains medical records of 299 patients with previous events of heart failure.
+
+The data was retrieved from the [UC Irvine Machine Learning Repository](https://archive.ics.uci.edu/dataset/519/heart+failure+clinical+records). More information on the data and the methodology is available in the corresponding [publication](https://www.semanticscholar.org/paper/e64579d8593140396b518682bb3a47ba246684eb).
+
+```{r packages}
+#| output: false
+library(tidyverse)
+library(tidymodels)
+library(skimr)
+library(Hmisc)
+```
+
+```{r data}
+hf <- read.csv("data/heart_failure_clinical_records_dataset.csv")
+```
+
+```{r skim}
+str(hf)
+skim(hf)
+```
+
+```{r target_var}
+hf <- hf %>% 
+  rename(Death = DEATH_EVENT) %>% 
+  mutate(Death = factor(Death))
+```
+
+```{r splits}
+set.seed(123)
+hf_split <- initial_split(hf, strata = Death, prop = 0.7)
+hf_train <- training(hf_split)
+hf_test <- testing(hf_split)
+```
+
+```{r cv_folds}
+train_folds <- vfold_cv(hf_train, v = 10, repeats = 2)
+```
+
+```{r}
+# distributions
+# 
+# correlations
+```
+
+
+
+Model
+```{r}
+hf_recipe <- recipe(death ~ ., data = hf_train) %>% 
+  step_mutate(across(c(aneemia, diabetes, high_blood_pressure, sex, smoking), as.factor)) %>% 
+  step_normalize(all_numeric_predictors)
+
+```
+
