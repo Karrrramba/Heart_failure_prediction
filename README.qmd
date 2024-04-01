@@ -29,13 +29,13 @@ skim(hf)
 
 ```{r target_var}
 hf <- hf %>% 
-  rename(Death = DEATH_EVENT) %>% 
-  mutate(Death = factor(Death))
+  rename(death = DEATH_EVENT) %>% 
+  mutate(death = as.factor(death))
 ```
 
 ```{r splits}
 set.seed(123)
-hf_split <- initial_split(hf, strata = Death, prop = 0.7)
+hf_split <- initial_split(hf, strata = death, prop = 0.7)
 hf_train <- training(hf_split)
 hf_test <- testing(hf_split)
 ```
@@ -52,8 +52,6 @@ num_vars <- hf_train %>%
   select(where(~ is.numeric(.x) && max(.x) > 1)) %>% 
   names()
 
-ggplot(data = hf_train, aes(x = age)) +
-  geom_point()
 
 plots <- list()
 
@@ -90,7 +88,7 @@ do.call("grid.arrange", c(plots, ncol = 4))
 
 ```{r}
 cat_vars <- hf_train %>% 
-  select(c(Death, where(~is.numeric(.) && max(.) == 1))) %>% 
+  select(c(death, where(~is.numeric(.) && max(.) == 1))) %>% 
   names()
 
 cplots <- list()
@@ -111,16 +109,43 @@ for (i in seq_along(cat_vars)){
 
 do.call("grid.arrange", c(cplots, ncol = 2))
 ```
+```{r}
+hf_train %>% mutate(across(c(age, platelets), ~ as.integer(.)))
+```
 
 
-Model
+## Model
 ```{r}
 hf_recipe <- recipe(death ~ ., data = hf_train) %>% 
-  step_mutate(across(c(aneemia, diabetes, high_blood_pressure, sex, smoking), as.factor)) %>% 
-  step_log(contains("creatinine")) %>% 
-  step_normalize(all_numeric_predictors())
+  step_log(contains("creatinine")) %>%
+  step_normalize(c(platelets, age, serum_creatinine, serum_sodium, time, ejection_fraction, creatinine_phosphokinase))
+```
 
+```{r}
 wf <- workflow() %>% 
   add_recipe(hf_recipe)
-  
 ```
+
+
+#### Model tuning
+```{r}
+tune_lasso <- logistic_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet")
+```
+
+```{r}
+lasso_grid <- tune_grid(
+  add_model(wf, tune_lasso),
+  resamples = train_folds,
+  grid = grid_regular(penalty(), levels = 20))
+```
+
+```{r}
+best_lasso <- lasso_grid %>% select_best("roc_auc")
+```
+
+```{r}
+final_lasso <- finalize_workflow(add_model(wf, tune_lasso),
+                                 best_lasso)
+```
+
