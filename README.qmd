@@ -14,6 +14,7 @@ The data was retrieved from the [UC Irvine Machine Learning Repository](https://
 library(tidyverse)
 library(tidymodels)
 library(skimr)
+library(gridExtra)
 library(Hmisc)
 ```
 
@@ -45,17 +46,81 @@ train_folds <- vfold_cv(hf_train, v = 10, repeats = 2)
 
 ```{r}
 # distributions
-# 
+theme_set(theme_bw())
+
+num_vars <- hf_train %>% 
+  select(where(~ is.numeric(.x) && max(.x) > 1)) %>% 
+  names()
+
+ggplot(data = hf_train, aes(x = age)) +
+  geom_point()
+
+plots <- list()
+
+for (i in seq_along(num_vars)) {
+  
+  var <- num_vars[i]
+  
+  if (str_detect(var, "creatinine")) {
+    p <- ggplot(data = hf_train, aes(x = log(!!sym(var))))
+    
+    q <-  ggplot(data = hf_train, aes(sample = log(!!sym(var)))) +
+      stat_qq() +
+      stat_qq_line()
+    
+  } else {
+    p <- ggplot(data = hf_train, aes(x = !!sym(var)))
+    
+    q <-  ggplot(data = hf_train, aes(sample = !!sym(var))) +
+      stat_qq() +
+      stat_qq_line()
+  }
+  
+  h <- p + 
+    geom_histogram() +
+    ggtitle(var)
+  
+  plots <- append(plots, list(h, q))
+}
+
+do.call("grid.arrange", c(plots, ncol = 4))
+
 # correlations
 ```
 
+```{r}
+cat_vars <- hf_train %>% 
+  select(c(Death, where(~is.numeric(.) && max(.) == 1))) %>% 
+  names()
+
+cplots <- list()
+
+for (i in seq_along(cat_vars)){
+  
+  var = cat_vars[i]
+
+  p <- ggplot(hf_train, aes(x = !!sym(var),
+                            group = !!sym(var),
+                            fill = factor(!!sym(var)))) +
+    geom_bar() +
+    theme(legend.position = "none") +
+    ggtitle(var)
+  
+  cplots <- append(cplots, list(p))
+}
+
+do.call("grid.arrange", c(cplots, ncol = 2))
+```
 
 
 Model
 ```{r}
 hf_recipe <- recipe(death ~ ., data = hf_train) %>% 
   step_mutate(across(c(aneemia, diabetes, high_blood_pressure, sex, smoking), as.factor)) %>% 
-  step_normalize(all_numeric_predictors)
+  step_log(contains("creatinine")) %>% 
+  step_normalize(all_numeric_predictors())
 
+wf <- workflow() %>% 
+  add_recipe(hf_recipe)
+  
 ```
-
