@@ -13,9 +13,10 @@ The data was retrieved from the [UC Irvine Machine Learning Repository](https://
 #| output: false
 library(tidyverse)
 library(tidymodels)
-library(skimr)
 library(gridExtra)
 library(Hmisc)
+library(skimr)
+library(vip)
 ```
 
 ```{r data}
@@ -127,7 +128,7 @@ wf <- workflow() %>%
 ```
 
 
-#### Model tuning
+### Model tuning
 ```{r}
 tune_lasso <- logistic_reg(penalty = tune(), mixture = 1) %>% 
   set_engine("glmnet")
@@ -141,11 +142,60 @@ lasso_grid <- tune_grid(
 ```
 
 ```{r}
-best_lasso <- lasso_grid %>% select_best("roc_auc")
+best_roc_lasso <- lasso_grid %>% select_best("roc_auc")
 ```
 
 ```{r}
 final_lasso <- finalize_workflow(add_model(wf, tune_lasso),
-                                 best_lasso)
+                                 best_roc_lasso)
+```
+
+```{r}
+last_fit(final_lasso, hf_split) %>% 
+  collect_metrics()
+```
+
+##### Variable importance
+```{r}
+final_lasso %>% 
+  fit(hf_train) %>% 
+  extract_fit_parsnip() %>% 
+  vip::vi(lambda = best_lasso$penalty)
+```
+### Random forest
+```{r}
+tune_rf <- rand_forest(
+  mode = "classification",
+  engine = "ranger",
+  trees = 100, 
+  mtry = tune(), 
+  min_n = tune()
+)
+```
+
+```{r}
+rf_grid <- tune_grid(
+  add_model(wf, tune_rf),
+  resamples = train_folds,
+  grid = grid_regular(
+    mtry(range = c(3, 8)),
+    min_n(),
+    levels = 20
+  )
+)
+```
+
+```{r}
+best_roc_rf <- rf_grid %>% select_best("roc_auc")
+```
+
+```{r}
+final_rf <- finalize_workflow(add_model(wf, tune_rf),
+                              best_roc_rf)
+```
+
+```{r}
+last_fit(final_rf, hf_split) %>% 
+  collect_metrics()
 ```
 
