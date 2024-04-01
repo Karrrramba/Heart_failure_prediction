@@ -116,15 +116,19 @@ hf_train %>% mutate(across(c(age, platelets), ~ as.integer(.)))
 
 
 ## Model
-```{r}
+```{r recipe}
 hf_recipe <- recipe(death ~ ., data = hf_train) %>% 
   step_log(contains("creatinine")) %>%
   step_normalize(c(platelets, age, serum_creatinine, serum_sodium, time, ejection_fraction, creatinine_phosphokinase))
 ```
 
-```{r}
+```{r workflow}
 wf <- workflow() %>% 
   add_recipe(hf_recipe)
+```
+
+```{r}
+met <- metric_set(roc_auc, f_meas, mcc, precision)
 ```
 
 
@@ -138,7 +142,11 @@ tune_lasso <- logistic_reg(penalty = tune(), mixture = 1) %>%
 lasso_grid <- tune_grid(
   add_model(wf, tune_lasso),
   resamples = train_folds,
-  grid = grid_regular(penalty(), levels = 20))
+  grid = grid_regular(
+    penalty(),
+    levels = 50
+    )
+  )
 ```
 
 ```{r}
@@ -151,7 +159,7 @@ final_lasso <- finalize_workflow(add_model(wf, tune_lasso),
 ```
 
 ```{r}
-last_fit(final_lasso, hf_split) %>% 
+last_fit(final_lasso, hf_split, metrics = met) %>% 
   collect_metrics()
 ```
 
@@ -180,7 +188,7 @@ rf_grid <- tune_grid(
   grid = grid_regular(
     mtry(range = c(3, 8)),
     min_n(),
-    levels = 20
+    levels = 50
   )
 )
 ```
@@ -195,7 +203,40 @@ final_rf <- finalize_workflow(add_model(wf, tune_rf),
 ```
 
 ```{r}
-last_fit(final_rf, hf_split) %>% 
+last_fit(final_rf, hf_split, metrics = met) %>% 
+  collect_metrics()
+```
+### Support vector machines
+```{r}
+tune_svm <- svm_rbf(
+  mode = "classification", 
+  engine = "kernlab",
+  cost = tune(),
+)
+```
+
+```{r}
+svm_grid <- tune_grid(
+  add_model(wf, tune_svm),
+  resamples = train_folds,
+  grid = grid_regular(
+    cost(),
+    levels = 50
+  )
+)
+```
+
+```{r}
+best_roc_svm <- svm_grid %>% select_best("roc_auc")
+```
+
+```{r}
+final_svm <- finalize_workflow(add_model(wf, tune_svm),
+                               best_roc_svm)
+```
+
+```{r}
+last_fit(final_svm, hf_split, metrics = met) %>% 
   collect_metrics()
 ```
 
