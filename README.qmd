@@ -11,11 +11,12 @@ The data was retrieved from the [UC Irvine Machine Learning Repository](https://
 
 ```{r packages}
 #| output: false
-library(tidyverse)
-library(tidymodels)
+library(corrplot)
 library(gridExtra)
 library(Hmisc)
 library(skimr)
+library(tidymodels)
+library(tidyverse)
 library(vip)
 ```
 
@@ -87,6 +88,22 @@ do.call("grid.arrange", c(plots, ncol = 4))
 # correlations
 ```
 
+```{r corrmap}
+correlation_matrix <- hf_train %>%
+  select(all_of(num_vars)) %>%
+  cor(as.matrix(.), method = "pearson")
+```
+
+```{r corrplot}
+corrplot::corrplot(correlation_matrix, 
+         method = "square",
+         type = "lower",
+         order = "alphabet",
+         addCoef.col = 'black',
+         diag = FALSE)
+```
+
+
 ```{r}
 cat_vars <- hf_train %>% 
   select(c(death, where(~is.numeric(.) && max(.) == 1))) %>% 
@@ -97,11 +114,18 @@ cplots <- list()
 for (i in seq_along(cat_vars)){
   
   var = cat_vars[i]
+  
+  # d <- hf_train %>% 
+  #   count({{ var }}) %>% 
+  #   mutate(prop = n / sum(n) * 100,
+  #          label = paste0(n, " (", round(prop, 1), "%)"))
 
   p <- ggplot(hf_train, aes(x = !!sym(var),
                             group = !!sym(var),
                             fill = factor(!!sym(var)))) +
     geom_bar() +
+    # geom_text(data = d, aes(label = label),
+    #           position = position_stack(vjust = 0.5)) +
     theme(legend.position = "none") +
     ggtitle(var)
   
