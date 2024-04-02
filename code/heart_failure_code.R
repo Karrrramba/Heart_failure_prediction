@@ -18,15 +18,16 @@ hf <- hf %>%
   rename(death = DEATH_EVENT) %>% 
   mutate(death = as.factor(death))
 
-# Train-test split
+# Train-test split----
 set.seed(123)
 hf_split <- initial_split(hf, strata = death, prop = 0.7)
 hf_train <- training(hf_split)
 hf_test <- testing(hf_split)
 
 train_folds <- vfold_cv(hf_train, v = 10, repeats = 2)
+train_folds
 
-# Variable distributions
+# Variable distributions----
 theme_set(theme_bw())
 
 num_vars <- hf_train %>% 
@@ -63,7 +64,7 @@ for (i in seq_along(num_vars)) {
 
 do.call("grid.arrange", c(plots, ncol = 4))
 
-## Correlations
+## Correlations----
 correlation_matrix <- hf_train %>%
   select(all_of(num_vars)) %>%
   cor(as.matrix(.), method = "pearson")
@@ -111,11 +112,14 @@ do.call("grid.arrange", c(cplots, ncol = 2))
 #  Model----
 ## Model recipe----
 hf_recipe <- recipe(death ~ ., data = hf_train) %>% 
-  step_BoxCox(c(serum_creatinine)) %>% 
+  step_BoxCox(serum_creatinine) %>% 
   step_log(creatinine_phosphokinase) %>% 
   step_normalize(c(platelets, age, serum_sodium, time, ejection_fraction, creatinine_phosphokinase)) %>% 
   step_smote(death, over_ratio = 0.8)
- 
+
+wf <- workflow() %>% 
+  add_recipe(hf_recipe)
+
 
 hf_prep <- prep(hf_recipe)
 juiced <- juice(hf_prep)
@@ -124,10 +128,13 @@ summary(juiced)
 juiced %>% count(death) %>% 
   mutate(prop = n * 100 / sum(n))
 
-wf <- workflow() %>% 
-  add_recipe(hf_recipe)
 
+#  Set metrics for classification
 met <- metric_set(roc_auc, mcc, recall)
+
+# Create bootstraps
+set.seed(2024)
+hf_boot <- bootstraps(hf_train, times = 20)
 
 
 ## Lasso ----
@@ -140,15 +147,31 @@ lasso_grid <- tune_grid(
   resamples = train_folds,
   grid = grid_regular(
     penalty(),
-    levels = 50
-  )
+    levels = 50),
+  metrics = met
 )
-# select best parameter model
-best_roc_lasso <- lasso_grid %>% select_best("roc_auc")
 
-# 
-final_lasso <- finalize_workflow(add_model(wf, tune_lasso),
-                                 best_roc_lasso)
+lasso_grid %>% 
+  collect_metrics() %>% 
+  ggplot(aes(penalty, mean, color = .metric)) +
+  geom_line(size = 1.5) +
+  geom_errorbar(aes(ymax = mean + std_err, 
+                    ymin = mean - std_err),
+                alpha = 0.5) +
+  facet_wrap(~ .metric, nrow = 3, scales = "free") +
+  scale_x_log10() +
+  theme_bw() +
+  theme(legend.position = "none")
+  
+# Extract best-perfroming model
+best_roc_lasso <- lasso_grid %>% select_best("roc_auc")
+best_recall_lasso <- lasso_grid %>% select_best("recall")
+
+final_lasso <- 
+  finalize_workflow(add_model(wf, tune_lasso),best_roc_lasso) %>% 
+  fit(hf_train) %>% 
+  extract_fit_parsnip() %>% 
+  vi(lambda = best_roc_lasso$penalty)
 
 # Check performance on test set
 last_fit(final_lasso, hf_split, metrics = met) %>% 
@@ -177,8 +200,8 @@ rf_grid <- tune_grid(
   grid = grid_regular(
     mtry(range = c(3, 10)),
     min_n(c(2, 5)),
-    levels = 100
-  )
+    levels = 100),
+  metrics = met
 )
 
 rf_grid %>% 
@@ -192,7 +215,7 @@ rf_grid %>%
   geom_point() +
   facet_wrap(~ parameter)
 
-
+# Extract model with best performance
 best_roc_rf <- rf_grid %>% select_best("roc_auc")
 
 final_model_rf <- finalize_model(tune_rf,best_roc_rf)
