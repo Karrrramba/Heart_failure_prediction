@@ -143,12 +143,14 @@ lasso_grid <- tune_grid(
     levels = 50
   )
 )
-
+# select best parameter model
 best_roc_lasso <- lasso_grid %>% select_best("roc_auc")
 
+# 
 final_lasso <- finalize_workflow(add_model(wf, tune_lasso),
                                  best_roc_lasso)
 
+# Check performance on test set
 last_fit(final_lasso, hf_split, metrics = met) %>% 
   collect_metrics()
 
@@ -159,24 +161,23 @@ final_lasso %>%
   vip::vi(lambda = best_roc_lasso$penalty)
 
 
-## Random forest
+## Random forest ----
 tune_rf <- rand_forest(
   mode = "classification",
   engine = "ranger",
-  trees = 100, 
+  trees = 100,
   mtry = tune(), 
   min_n = tune()
 )
 
-doParallel::registerDoParallel()
-
+# Parameter tuning rf----
 rf_grid <- tune_grid(
   add_model(wf, tune_rf),
   resamples = train_folds,
   grid = grid_regular(
-    mtry(range = c(3, 20)),
-    min_n(c(2, 10)),
-    levels = 50
+    mtry(range = c(3, 10)),
+    min_n(c(2, 5)),
+    levels = 100
   )
 )
 
@@ -191,20 +192,26 @@ rf_grid %>%
   geom_point() +
   facet_wrap(~ parameter)
 
+
 best_roc_rf <- rf_grid %>% select_best("roc_auc")
 
-final_rf <- finalize_workflow(add_model(wf, tune_rf),
-                              best_roc_rf)
-# Variable importance ----
-final_rf %>% 
+final_model_rf <- finalize_model(tune_rf,best_roc_rf)
+
+# Variable importance
+final_model_rf %>% 
   set_engine("ranger", importance = "permutation") %>% 
   fit(death ~ .,
       data = juice(hf_prep)) %>% 
   vip(geom = "point")
 
+# Create workflow with best model
+final_wf_rf <- workflow() %>% 
+  add_recipe(hf_recipe) %>% 
+  add_model(final_model_rf)
 
-last_fit(final_rf, hf_split, metrics = met) %>% 
-  collect_metrics()
+final_res_rf <- last_fit(final_wf_rf, hf_split, metrics = met) 
+
+final_res_rf %>% collect_metrics()
 
 ## Support vector machines
 tune_svm <- svm_rbf(
