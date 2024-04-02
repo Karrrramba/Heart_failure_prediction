@@ -3,13 +3,14 @@ library(corrplot)
 library(gridExtra)
 library(Hmisc)
 library(skimr)
+library(themis)
 library(tidymodels)
 library(tidyverse)
 library(vip)
 
 
 # Data
-hf <- read.csv("../data/heart_failure_clinical_records_dataset.csv")
+hf <- read_csv("data/heart_failure_clinical_records_dataset.csv")
 str(hf)
 skim(hf)
 
@@ -107,21 +108,32 @@ do.call("grid.arrange", c(cplots, ncol = 2))
 
 
 
-#  Model
-## Model recipe
+#  Model----
+## Model recipe----
 hf_recipe <- recipe(death ~ ., data = hf_train) %>% 
-  step_log(contains("creatinine")) %>%
-  step_normalize(c(platelets, age, serum_creatinine, serum_sodium, time, ejection_fraction, creatinine_phosphokinase))
+  step_BoxCox(c(serum_creatinine)) %>% 
+  step_log(creatinine_phosphokinase) %>% 
+  step_normalize(c(platelets, age, serum_sodium, time, ejection_fraction, creatinine_phosphokinase)) %>% 
+  step_smote(death, over_ratio = 0.8)
+ 
+
+hf_prep <- prep(hf_recipe)
+juiced <- juice(hf_prep)
+
+summary(juiced)
+juiced %>% count(death) %>% 
+  mutate(prop = n * 100 / sum(n))
 
 wf <- workflow() %>% 
   add_recipe(hf_recipe)
 
-met <- metric_set(roc_auc, f_meas, mcc, precision)
+met <- metric_set(roc_auc, mcc, recall)
 
 
-## Lasso
-tune_lasso <- logistic_reg(penalty = tune(), mixture = 1) %>% 
-  set_engine("glmnet")
+## Lasso ----
+tune_lasso <- logistic_reg(penalty = tune(), 
+                           mixture = 1, 
+                           engine = "glmnet") 
 
 lasso_grid <- tune_grid(
   add_model(wf, tune_lasso),
@@ -140,11 +152,11 @@ final_lasso <- finalize_workflow(add_model(wf, tune_lasso),
 last_fit(final_lasso, hf_split, metrics = met) %>% 
   collect_metrics()
 
-### Variable importance
+# Variable importance ----
 final_lasso %>% 
   fit(hf_train) %>% 
   extract_fit_parsnip() %>% 
-  vip::vi(lambda = best_lasso$penalty)
+  vip::vi(lambda = best_roc_lasso$penalty)
 
 
 ## Random forest
@@ -156,20 +168,40 @@ tune_rf <- rand_forest(
   min_n = tune()
 )
 
+doParallel::registerDoParallel()
+
 rf_grid <- tune_grid(
   add_model(wf, tune_rf),
   resamples = train_folds,
   grid = grid_regular(
-    mtry(range = c(3, 8)),
-    min_n(),
+    mtry(range = c(3, 20)),
+    min_n(c(2, 10)),
     levels = 50
   )
 )
+
+rf_grid %>% 
+  collect_metrics() %>% 
+  filter(.metric == "roc_auc") %>% 
+  select(mean, min_n, mtry) %>% 
+  pivot_longer(min_n:mtry, 
+               values_to = "auc",
+               names_to = "parameter") %>% 
+  ggplot(aes(x = auc, y = mean, color = parameter)) +
+  geom_point() +
+  facet_wrap(~ parameter)
 
 best_roc_rf <- rf_grid %>% select_best("roc_auc")
 
 final_rf <- finalize_workflow(add_model(wf, tune_rf),
                               best_roc_rf)
+# Variable importance ----
+final_rf %>% 
+  set_engine("ranger", importance = "permutation") %>% 
+  fit(death ~ .,
+      data = juice(hf_prep)) %>% 
+  vip(geom = "point")
+
 
 last_fit(final_rf, hf_split, metrics = met) %>% 
   collect_metrics()
