@@ -9,6 +9,7 @@ library(tidymodels)
 library(tidyverse)
 library(vip)
 
+theme_set(theme_bw())
 
 # Data
 hf <- read_csv("data/heart_failure_clinical_records_dataset.csv")
@@ -28,97 +29,14 @@ hf_test <- testing(hf_split)
 train_folds <- vfold_cv(hf_train, v = 10, repeats = 2)
 
 # Variable distributions----
-theme_set(theme_bw())
-
 hf_train %>% 
   mutate(across(c(sex, smoking, anaemia, diabetes, high_blood_pressure), ~ as.factor(.))) %>% 
   ggpairs(switch = "y")
 
-
-num_vars <- hf_train %>% 
-  select(where(~ is.numeric(.x) && max(.x) > 1)) %>% 
-  names()
-
-plots <- list()
-
-for (i in seq_along(num_vars)) {
-  
-  var <- num_vars[i]
-  
-  if (str_detect(var, "creatinine")) {
-    p <- ggplot(data = hf_train, aes(x = log(!!sym(var))))
-    
-    q <-  ggplot(data = hf_train, aes(sample = log(!!sym(var)))) +
-      stat_qq() +
-      stat_qq_line()
-    
-  } else {
-    p <- ggplot(data = hf_train, aes(x = !!sym(var)))
-    
-    q <-  ggplot(data = hf_train, aes(sample = !!sym(var))) +
-      stat_qq() +
-      stat_qq_line()
-  }
-  
-  h <- p + 
-    geom_histogram() +
-    ggtitle(var)
-  
-  plots <- append(plots, list(h, q))
-}
-
-do.call("grid.arrange", c(plots, ncol = 4))
-
-# ## Correlations----
-# correlation_matrix <- hf_train %>%
-#   select(all_of(num_vars)) %>%
-#   cor(as.matrix(.), method = "pearson")
-# 
-# 
-# 
-# corrplot::corrplot(correlation_matrix, 
-#                    method = "square",
-#                    type = "lower",
-#                    order = "alphabet",
-#                    addCoef.col = 'black',
-#                    diag = FALSE)
-
-
-cat_vars <- hf_train %>% 
-  select(c(death, where(~is.numeric(.) && max(.) == 1))) %>% 
-  names()
-
-cplots <- list()
-
-for (i in seq_along(cat_vars)){
-  
-  var = cat_vars[i]
-  
-  # d <- hf_train %>% 
-  #   count({{ var }}) %>% 
-  #   mutate(prop = n / sum(n) * 100,
-  #          label = paste0(n, " (", round(prop, 1), "%)"))
-  
-  p <- ggplot(hf_train, aes(x = !!sym(var),
-                            group = !!sym(var),
-                            fill = factor(!!sym(var)))) +
-    geom_bar() +
-    # geom_text(data = d, aes(label = label),
-    #           position = position_stack(vjust = 0.5)) +
-    theme(legend.position = "none") +
-    ggtitle(var)
-  
-  cplots <- append(cplots, list(p))
-}
-do.call("grid.arrange", c(cplots, ncol = 2))
-
-
-
 #  Model----
 ## Model recipe----
 hf_recipe <- recipe(death ~ ., data = hf_train) %>% 
-  step_BoxCox(serum_creatinine) %>% 
-  step_log(creatinine_phosphokinase) %>% 
+  step_log(c(creatinine_phosphokinase, serum_creatinine)) %>% 
   step_normalize(c(platelets, age, serum_sodium, time, ejection_fraction, creatinine_phosphokinase)) %>% 
   step_smote(death, over_ratio = 0.8)
 
@@ -136,11 +54,6 @@ juiced %>% count(death) %>%
 
 #  Set metrics for classification
 met <- metric_set(roc_auc, mcc, recall)
-
-# Create bootstraps
-set.seed(2024)
-hf_boot <- bootstraps(hf_train, times = 20)
-
 
 ## Lasso ----
 tune_lasso <- logistic_reg(penalty = tune(), 
@@ -170,13 +83,8 @@ lasso_grid %>%
   
 # Extract best-perfroming model
 best_roc_lasso <- lasso_grid %>% select_best("roc_auc")
-best_recall_lasso <- lasso_grid %>% select_best("recall")
 
-final_lasso <- 
-  finalize_workflow(add_model(wf, tune_lasso),best_roc_lasso) %>% 
-  fit(hf_train) %>% 
-  extract_fit_parsnip() %>% 
-  vi(lambda = best_roc_lasso$penalty)
+final_lasso <- finalize_workflow(wf %>% add_model(tune_lasso), best_roc_lasso)
 
 # Check performance on test set
 last_fit(final_lasso, hf_split, metrics = met) %>% 
@@ -186,8 +94,10 @@ last_fit(final_lasso, hf_split, metrics = met) %>%
 final_lasso %>% 
   fit(hf_train) %>% 
   extract_fit_parsnip() %>% 
-  vip::vi(lambda = best_roc_lasso$penalty)
-
+  vip::vi(lambda = best_roc_lasso$penalty) %>% 
+  mutate(Variable = fct_reorder(Variable, Importance)) %>% 
+  ggplot(aes(Importance, Variable, color = Sign)) +
+  geom_point(size = 3)
 
 ## Random forest ----
 tune_rf <- rand_forest(
