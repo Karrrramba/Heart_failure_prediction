@@ -1,8 +1,6 @@
 # Packages
-library(corrplot)
 library(GGally)
 library(gridExtra)
-library(Hmisc)
 library(skimr)
 library(themis)
 library(tidymodels)
@@ -38,7 +36,7 @@ hf_train %>%
 hf_recipe <- recipe(death ~ ., data = hf_train) %>% 
   step_log(c(creatinine_phosphokinase, serum_creatinine)) %>% 
   step_normalize(c(platelets, age, serum_sodium, time, ejection_fraction, creatinine_phosphokinase)) %>% 
-  step_smote(death, over_ratio = 0.8)
+  step_smote(death, over_ratio = 1)
 
 wf <- workflow() %>% 
   add_recipe(hf_recipe)
@@ -47,13 +45,21 @@ wf <- workflow() %>%
 hf_prep <- prep(hf_recipe)
 juiced <- juice(hf_prep)
 
+tibble("before" = hf_train %>%
+         count(death) %>%
+         mutate(prop = n * 100 / sum(n)),
+       "after" = juiced %>%
+         count(death) %>%
+         mutate(prop = n * 100 / sum(n)),
+)
+
 summary(juiced)
 juiced %>% count(death) %>% 
   mutate(prop = n * 100 / sum(n))
 
 
 #  Set metrics for classification
-met <- metric_set(roc_auc, mcc, recall)
+met <- metric_set(roc_auc, mcc, precision)
 
 ## Lasso ----
 tune_lasso <- logistic_reg(penalty = tune(), 
@@ -83,11 +89,13 @@ lasso_grid %>%
   
 # Extract best-perfroming model
 best_roc_lasso <- lasso_grid %>% select_best("roc_auc")
+best_mcc_lasso <- lasso_grid %>% select_best("mcc")
 
-final_lasso <- finalize_workflow(wf %>% add_model(tune_lasso), best_roc_lasso)
+final_lasso_r <- finalize_workflow(wf %>% add_model(tune_lasso), best_roc_lasso)
+final_lasso_m <- finalize_workflow(wf %>% add_model(tune_lasso), best_mcc_lasso)
 
 # Check performance on test set
-last_fit(final_lasso, hf_split, metrics = met) %>% 
+last_fit(final_lasso_m, hf_split, metrics = met) %>% 
   collect_metrics()
 
 # Variable importance ----
