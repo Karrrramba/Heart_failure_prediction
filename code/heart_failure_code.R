@@ -1,5 +1,6 @@
 # Packages
 library(corrplot)
+library(GGally)
 library(gridExtra)
 library(Hmisc)
 library(skimr)
@@ -25,10 +26,14 @@ hf_train <- training(hf_split)
 hf_test <- testing(hf_split)
 
 train_folds <- vfold_cv(hf_train, v = 10, repeats = 2)
-train_folds
 
 # Variable distributions----
 theme_set(theme_bw())
+
+hf_train %>% 
+  mutate(across(c(sex, smoking, anaemia, diabetes, high_blood_pressure), ~ as.factor(.))) %>% 
+  ggpairs(switch = "y")
+
 
 num_vars <- hf_train %>% 
   select(where(~ is.numeric(.x) && max(.x) > 1)) %>% 
@@ -64,19 +69,19 @@ for (i in seq_along(num_vars)) {
 
 do.call("grid.arrange", c(plots, ncol = 4))
 
-## Correlations----
-correlation_matrix <- hf_train %>%
-  select(all_of(num_vars)) %>%
-  cor(as.matrix(.), method = "pearson")
-
-
-
-corrplot::corrplot(correlation_matrix, 
-                   method = "square",
-                   type = "lower",
-                   order = "alphabet",
-                   addCoef.col = 'black',
-                   diag = FALSE)
+# ## Correlations----
+# correlation_matrix <- hf_train %>%
+#   select(all_of(num_vars)) %>%
+#   cor(as.matrix(.), method = "pearson")
+# 
+# 
+# 
+# corrplot::corrplot(correlation_matrix, 
+#                    method = "square",
+#                    type = "lower",
+#                    order = "alphabet",
+#                    addCoef.col = 'black',
+#                    diag = FALSE)
 
 
 cat_vars <- hf_train %>% 
