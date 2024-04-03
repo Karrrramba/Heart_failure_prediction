@@ -208,14 +208,14 @@ rf_grid <- tune_grid(
 
 ```{r}
 rf_grid %>% select_best("roc_auc")
-rf_grid %>% select_best("")
+rf_grid %>% select_best("precision")
 rf_grid %>% select_best("mcc")
 
-best_roc_rf <- rf_grid %>% select_best("roc_auc")
+best_roc_rf <- rf_grid %>% select_best("mcc")
 ```
 
 ```{r}
-final_rf <- finalize_workflow(add_model(wf, tune_rf),
+final_rf <- finalize_workflow(wf, add_model(tune_rf),
                               best_roc_rf)
 ```
 
@@ -230,6 +230,7 @@ tune_svm <- svm_rbf(
   mode = "classification", 
   engine = "kernlab",
   cost = tune(),
+  rbf_sigma = tune()
 )
 ```
 
@@ -239,17 +240,22 @@ svm_grid <- tune_grid(
   resamples = train_folds,
   grid = grid_regular(
     cost(),
+    rbf_sigma(),
     levels = 50
   )
 )
 ```
 
 ```{r}
-best_roc_svm <- svm_grid %>% select_best("roc_auc")
+svm_grid %>% select_best("roc_auc")
+svm_grid %>% select_best("precision")
+svm_grid %>% select_best("mcc")
+
+# best_roc_svm <- svm_grid %>% select_best("roc_auc")
 ```
 
 ```{r}
-final_svm <- finalize_workflow(add_model(wf, tune_svm),
+final_svm <- finalize_workflow(wf %>% add_model(tune_svm),
                                best_roc_svm)
 ```
 
