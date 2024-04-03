@@ -11,10 +11,11 @@ The data was retrieved from the [UC Irvine Machine Learning Repository](https://
 
 ```{r packages}
 #| output: false
-library(corrplot)
+library(GGally)
 library(gridExtra)
-library(Hmisc)
+library(gt)
 library(skimr)
+library(themis)
 library(tidymodels)
 library(tidyverse)
 library(vip)
@@ -43,68 +44,21 @@ hf_test <- testing(hf_split)
 ```
 
 ```{r cv_folds}
-train_folds <- vfold_cv(hf_train, v = 10, repeats = 2)
+train_folds <- vfold_cv(hf_train, v = 10, repeats = 3)
 ```
 
-```{r}
-# distributions
+```{r ggpairs}
 theme_set(theme_bw())
 
-num_vars <- hf_train %>% 
-  select(where(~ is.numeric(.x) && max(.x) > 1)) %>% 
-  names()
-
-
-plots <- list()
-
-for (i in seq_along(num_vars)) {
-  
-  var <- num_vars[i]
-  
-  if (str_detect(var, "creatinine")) {
-    p <- ggplot(data = hf_train, aes(x = log(!!sym(var))))
-    
-    q <-  ggplot(data = hf_train, aes(sample = log(!!sym(var)))) +
-      stat_qq() +
-      stat_qq_line()
-    
-  } else {
-    p <- ggplot(data = hf_train, aes(x = !!sym(var)))
-    
-    q <-  ggplot(data = hf_train, aes(sample = !!sym(var))) +
-      stat_qq() +
-      stat_qq_line()
-  }
-  
-  h <- p + 
-    geom_histogram() +
-    ggtitle(var)
-  
-  plots <- append(plots, list(h, q))
-}
-
-do.call("grid.arrange", c(plots, ncol = 4))
-
-# correlations
-```
-
-```{r corrmap}
-correlation_matrix <- hf_train %>%
-  select(all_of(num_vars)) %>%
-  cor(as.matrix(.), method = "pearson")
-```
-
-```{r corrplot}
-corrplot::corrplot(correlation_matrix, 
-         method = "square",
-         type = "lower",
-         order = "alphabet",
-         addCoef.col = 'black',
-         diag = FALSE)
+hf_train %>% 
+  mutate(across(c(sex, smoking, anaemia, diabetes, high_blood_pressure), ~ as.factor(.))) %>% 
+  ggpairs(switch = "y")
 ```
 
 
 ```{r}
+#| eval: false
+#| echo: false
 cat_vars <- hf_train %>% 
   select(c(death, where(~is.numeric(.) && max(.) == 1))) %>% 
   names()
@@ -134,16 +88,29 @@ for (i in seq_along(cat_vars)){
 
 do.call("grid.arrange", c(cplots, ncol = 2))
 ```
-```{r}
-hf_train %>% mutate(across(c(age, platelets), ~ as.integer(.)))
-```
 
 
 ## Model
 ```{r recipe}
 hf_recipe <- recipe(death ~ ., data = hf_train) %>% 
-  step_log(contains("creatinine")) %>%
-  step_normalize(c(platelets, age, serum_creatinine, serum_sodium, time, ejection_fraction, creatinine_phosphokinase))
+  step_log(c(creatinine_phosphokinase, serum_creatinine)) %>% 
+  step_normalize(c(platelets, age, serum_sodium, time, ejection_fraction, creatinine_phosphokinase)) %>% 
+  step_smote(death, over_ratio = 0.8)
+```
+Check variable ranges after normalization
+```{r}
+hf_prep <- prep(hf_recipe)
+juiced <- juice(hf_prep)
+summary(juiced)
+
+# check ratio of target variable before and after upsampling
+tibble("before" = hf_train %>%
+         count(death) %>%
+         mutate(prop = n * 100 / sum(n)),
+       "after" = juiced %>%
+         count(death) %>%
+         mutate(prop = n * 100 / sum(n)),
+)
 ```
 
 ```{r workflow}
@@ -152,34 +119,51 @@ wf <- workflow() %>%
 ```
 
 ```{r}
-met <- metric_set(roc_auc, f_meas, mcc, precision)
+met <- metric_set(roc_auc, mcc, precision)
 ```
 
-
-### Model tuning
-```{r}
+## Lasso
+```{r lasso_model}
 tune_lasso <- logistic_reg(penalty = tune(), mixture = 1) %>% 
   set_engine("glmnet")
 ```
 
-```{r}
+```{r lasso_tune}
 lasso_grid <- tune_grid(
   add_model(wf, tune_lasso),
   resamples = train_folds,
   grid = grid_regular(
     penalty(),
-    levels = 50
-    )
-  )
+    levels = 50),
+  metrics = met
+)
+
+lasso_grid %>% 
+  collect_metrics() %>% 
+  ggplot(aes(penalty, mean, color = .metric)) +
+  geom_line(size = 1.5) +
+  geom_errorbar(aes(ymax = mean + std_err, 
+                    ymin = mean - std_err),
+                alpha = 0.5) +
+  facet_wrap(~ .metric, nrow = 3, scales = "free") +
+  scale_x_log10() +
+  theme_bw() +
+  theme(legend.position = "none")
+```
+
+Extract best-performing model
+```{r}
+lasso_grid %>% select_best("precision")
+lasso_grid %>% select_best("roc_auc")
+lasso_grid %>% select_best("mcc")
+
+best_mcc_lasso <- lasso_grid %>% select_best("mcc")
+
 ```
 
 ```{r}
-best_roc_lasso <- lasso_grid %>% select_best("roc_auc")
-```
-
-```{r}
-final_lasso <- finalize_workflow(add_model(wf, tune_lasso),
-                                 best_roc_lasso)
+final_lasso <- finalize_workflow(wf %>% add_model(tune_lasso), 
+                                   best_mcc_lasso)
 ```
 
 ```{r}
@@ -187,15 +171,20 @@ last_fit(final_lasso, hf_split, metrics = met) %>%
   collect_metrics()
 ```
 
-##### Variable importance
+### Variable importance
 ```{r}
 final_lasso %>% 
   fit(hf_train) %>% 
   extract_fit_parsnip() %>% 
-  vip::vi(lambda = best_lasso$penalty)
+  vip::vi(lambda = best_roc_lasso$penalty) %>% 
+  mutate(Variable = fct_reorder(Variable, Importance)) %>% 
+  ggplot(aes(Importance, Variable, color = Sign)) +
+  geom_point(size = 3) +
+  labs(y = NULL)
 ```
-### Random forest
-```{r}
+
+## Random forest
+```{r rf_model}
 tune_rf <- rand_forest(
   mode = "classification",
   engine = "ranger",
@@ -205,7 +194,7 @@ tune_rf <- rand_forest(
 )
 ```
 
-```{r}
+```{r rf_tune}
 rf_grid <- tune_grid(
   add_model(wf, tune_rf),
   resamples = train_folds,
@@ -218,6 +207,10 @@ rf_grid <- tune_grid(
 ```
 
 ```{r}
+rf_grid %>% select_best("roc_auc")
+rf_grid %>% select_best("")
+rf_grid %>% select_best("mcc")
+
 best_roc_rf <- rf_grid %>% select_best("roc_auc")
 ```
 
@@ -230,6 +223,7 @@ final_rf <- finalize_workflow(add_model(wf, tune_rf),
 last_fit(final_rf, hf_split, metrics = met) %>% 
   collect_metrics()
 ```
+
 ### Support vector machines
 ```{r}
 tune_svm <- svm_rbf(
@@ -263,4 +257,3 @@ final_svm <- finalize_workflow(add_model(wf, tune_svm),
 last_fit(final_svm, hf_split, metrics = met) %>% 
   collect_metrics()
 ```
-
