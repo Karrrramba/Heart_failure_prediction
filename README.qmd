@@ -106,11 +106,12 @@ rec_log <- recipe(death ~ ., data = hf_train) %>%
   step_normalize(c(platelets, age, serum_sodium, time, ejection_fraction, creatinine_phosphokinase)) %>% 
  
 rec_norm_smote <- rec_norm_all %>%  
-  step_smote(death, over_ratio = 1)
+  step_smote(death)
 
 rec_log_smote <- rec_log %>% 
-  step_smote(death, over_ratio = 1)
+  step_smote(death)
 
+recipes <- list()
 ```
 Check variable ranges after normalization
 ```{r}
@@ -128,7 +129,71 @@ tibble("before" = hf_train %>%
 )
 ```
 
+```{r model_specs}
+lasso_spec <- logistic_reg(
+  penalty = tune(), 
+  mixture = 1,
+  engine = "glmnet")
+
+rf_spec <- rand_forest(
+  trees = 100, 
+  mtry = tune(), 
+  min_n = tune(),
+  mode = "classification",
+  engine = "ranger"
+)
+  
+svm_r_spec <- svm_rbf(
+  cost = tune(),
+  rbf_sigma = tune(),
+  mode = "classification", 
+  engine = "kernlab"
+)
+
+svm_p_spec <- svm_poly(
+  cost = tune(),
+  rbf_sigma = tune(),
+  mode = "classification", 
+  engine = "kernlab"
+)
+  
+knn_spec <- nearest_neighbor(
+  neighbors = tune(), 
+  dist_power = tune(), 
+  weight_func = tune(), 
+  mode = "classification",
+  engine = "kknn"
+)
+  
+xg_spec <- boost_tree(
+  tree_depth = tune(), 
+  learn_rate = tune(), 
+  loss_reduction = tune(),
+  min_n = tune(), 
+  sample_size = tune(), 
+  trees = tune(),
+  mode = "classification", 
+  engine = "xgboost"
+)
+
+```
+
+
 ```{r workflow}
+comp_models <-
+  workflow_set(
+    preproc = list(
+      all = rec_norm_all,
+      log = rec_log,
+      sall = rec_norm_smote,
+      slog = reclog_smote,
+    ),
+    models = list(ls = lasso_spec, rf = rf_spec, svm = svm_spec, xg = xg_spec),
+    cross = TRUE
+  )
+
+comp_models
+
 wf <- workflow() %>% 
   add_recipe(hf_recipe)
 ```
@@ -239,7 +304,7 @@ last_fit(final_rf, hf_split, metrics = met) %>%
   collect_metrics()
 ```
 
-### Support vector machines
+## Support vector machines
 ```{r}
 tune_svm <- svm_rbf(
   mode = "classification", 
