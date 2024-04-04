@@ -31,6 +31,58 @@ hf_train %>%
   mutate(across(c(sex, smoking, anaemia, diabetes, high_blood_pressure), ~ as.factor(.))) %>% 
   ggpairs(switch = "y")
 
+function(data){
+  num_vars <- data %>% 
+  select(where(~ is.numeric(.) && max(.) > 1)) %>%
+  names()
+
+ cat_vars <- data %>% 
+  select(where(~is.numeric(.) && max(.) == 1)) %>% 
+  names()
+ 
+ for (c_var in categorical_vars) {
+   for (n_var in numeric_vars) {
+     
+     
+     var_plot <- data %>% 
+       select(!!sym(n_var), !!sym(c_var)) %>% 
+       group_by(!!sym(c_var)) %>% 
+       # calculate the daily mean value of the resp. numerical val for each level of categorical var 
+       summarise(var_mean = mean(!!sym(n_var)),
+                 .groups = "drop")
+
+     
+     b <- ggplot(data = var_plot,
+                 aes(
+                   x = !!sym(c_var),
+                   y = var_mean,
+                   group = !!sym(c_var),
+                   color = !!sym(c_var)
+                 )
+     ) +
+       geom_boxplot(alpha = 0.5) +
+       labs(title = paste("Box plot of mean", n_var, "by", c_var),
+            x = c_var,
+            y = n_var) +
+       theme_minimal() +
+       theme(legend.position = "none")
+       
+     plot(b)
+     
+   }
+   
+ }
+ 
+ 
+ 
+}
+
+
+
+
+hf_train %>%
+  ggplot(aes())
+  
 #  Model----
 ## Model recipe----
 hf_recipe <- recipe(death ~ ., data = hf_train) %>% 
@@ -111,7 +163,7 @@ final_lasso %>%
 tune_rf <- rand_forest(
   mode = "classification",
   engine = "ranger",
-  trees = 100,
+  trees = tune(),
   mtry = tune(), 
   min_n = tune()
 )
@@ -121,6 +173,7 @@ rf_grid <- tune_grid(
   add_model(wf, tune_rf),
   resamples = train_folds,
   grid = grid_regular(
+    trees(c(100, 200, 1000)),
     mtry(range = c(3, 10)),
     min_n(c(2, 5)),
     levels = 100),
