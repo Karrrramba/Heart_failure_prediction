@@ -98,7 +98,7 @@ ggplot(hf_train, aes(as.factor(smoking), fill = death)) +
 
 ## Model
 ```{r recipe}
-rec_norm_all <- recipe(death ~ ., data = hf_train) %>% 
+rec_norm <- recipe(death ~ ., data = hf_train) %>% 
   step_normalize(all_predictors) 
 
 rec_log <- recipe(death ~ ., data = hf_train) %>% 
@@ -111,7 +111,21 @@ rec_norm_smote <- rec_norm_all %>%
 rec_log_smote <- rec_log %>% 
   step_smote(death)
 
-recipes <- list()
+rec_n_poly <-  rec_norm %>% 
+   step_poly(all_predictors()) %>% 
+   step_interact(~ all_predictors():all_predictors())
+
+rec_l_poly <-  rec_log %>% 
+   step_poly(all_predictors()) %>% 
+   step_interact(~ all_predictors():all_predictors())
+
+rec_ns_poly <-  rec_norm_smote %>% 
+   step_poly(all_predictors()) %>% 
+   step_interact(~ all_predictors():all_predictors())
+
+rec_ls_poly <-  rec_log_smote %>% 
+   step_poly(all_predictors()) %>% 
+   step_interact(~ all_predictors():all_predictors())
 ```
 Check variable ranges after normalization
 ```{r}
@@ -183,12 +197,21 @@ xg_spec <- boost_tree(
 comp_models <-
   workflow_set(
     preproc = list(
-      all = rec_norm_all,
+      norm = rec_norm_all,
       log = rec_log,
       sall = rec_norm_smote,
       slog = reclog_smote,
+      pnorm = rec_n_poly,
+      plog = rec_l_poly,
+      psnorm = rec_ns_poly,
+      pslog = rec_ls_poly
     ),
-    models = list(ls = lasso_spec, rf = rf_spec, svm = svm_spec, xg = xg_spec),
+    models = list(ls = lasso_spec, 
+                  rf = rf_spec, 
+                  svm_r = svm_r_spec,
+                  svm_p = svm_p_spec, 
+                  knn = knn_spec,
+                  xg = xg_spec),
     cross = TRUE
   )
 
@@ -203,10 +226,6 @@ met <- metric_set(roc_auc, mcc, precision)
 ```
 
 ## Lasso
-```{r lasso_model}
-tune_lasso <- logistic_reg(penalty = tune(), mixture = 1) %>% 
-  set_engine("glmnet")
-```
 
 ```{r lasso_tune}
 lasso_grid <- tune_grid(
@@ -264,16 +283,6 @@ final_lasso %>%
 ```
 
 ## Random forest
-```{r rf_model}
-tune_rf <- rand_forest(
-  mode = "classification",
-  engine = "ranger",
-  trees = 100, 
-  mtry = tune(), 
-  min_n = tune()
-)
-```
-
 ```{r rf_tune}
 rf_grid <- tune_grid(
   add_model(wf, tune_rf),
@@ -306,15 +315,6 @@ last_fit(final_rf, hf_split, metrics = met) %>%
 
 ## Support vector machines
 ```{r}
-tune_svm <- svm_rbf(
-  mode = "classification", 
-  engine = "kernlab",
-  cost = tune(),
-  rbf_sigma = tune()
-)
-```
-
-```{r}
 svm_grid <- tune_grid(
   add_model(wf, tune_svm),
   resamples = train_folds,
@@ -342,10 +342,5 @@ final_svm <- finalize_workflow(wf %>% add_model(tune_svm),
 ```{r}
 last_fit(final_svm, hf_split, metrics = met) %>% 
   collect_metrics()
-```
-
-## Xgboost
-```{r}
-tune_xgb <- xgb
 ```
 
