@@ -55,47 +55,62 @@ hf_train %>%
   ggpairs(switch = "y")
 ```
 
+```{r eda_barplots}
 
-```{r}
-#| eval: false
-#| echo: false
-cat_vars <- hf_train %>% 
-  select(c(death, where(~is.numeric(.) && max(.) == 1))) %>% 
+facet_var = 
+ggplot(hf_train, aes(as.factor(smoking), fill = death)) +
+  geom_bar() +
+  facet_wrap(~anaemia)
+  facet_wrap(~as.factor(anaemia))
+```
+
+```{r eda_boxplots}
+# function(data){
+  num_vars <- hf_train %>% 
+  select(where(~is.numeric(.) && max(.) > 1)) %>%
   names()
 
-cplots <- list()
-
-for (i in seq_along(cat_vars)){
-  
-  var = cat_vars[i]
-  
-  # d <- hf_train %>% 
-  #   count({{ var }}) %>% 
-  #   mutate(prop = n / sum(n) * 100,
-  #          label = paste0(n, " (", round(prop, 1), "%)"))
-
-  p <- ggplot(hf_train, aes(x = !!sym(var),
-                            group = !!sym(var),
-                            fill = factor(!!sym(var)))) +
-    geom_bar() +
-    # geom_text(data = d, aes(label = label),
-    #           position = position_stack(vjust = 0.5)) +
-    theme(legend.position = "none") +
-    ggtitle(var)
-  
-  cplots <- append(cplots, list(p))
-}
-
-do.call("grid.arrange", c(cplots, ncol = 2))
+ cat_vars <- hf_train %>% 
+  select(where(~is.numeric(.) && max(.) == 1)) %>% 
+  names()
+ 
+ for (c_var in cat_vars) {
+   for (n_var in num_vars) {
+     
+     b <- ggplot(data = hf_train,
+                 aes(
+                   x = as.factor(!!sym(c_var)),
+                   y = !!sym(n_var),
+                   color = death)) +
+       geom_boxplot() +
+       labs(title = paste("Box plot of", n_var, "by", c_var),
+            x = c_var,
+            y = n_var) +
+       theme_minimal()
+       
+     plot(b)
+     
+   }
+ }
+# }
 ```
 
 
 ## Model
 ```{r recipe}
-hf_recipe <- recipe(death ~ ., data = hf_train) %>% 
+rec_norm_all <- recipe(death ~ ., data = hf_train) %>% 
+  step_normalize(all_predictors) 
+
+rec_log <- recipe(death ~ ., data = hf_train) %>% 
   step_log(c(creatinine_phosphokinase, serum_creatinine)) %>% 
   step_normalize(c(platelets, age, serum_sodium, time, ejection_fraction, creatinine_phosphokinase)) %>% 
-  step_smote(death, over_ratio = 0.8)
+ 
+rec_norm_smote <- rec_norm_all %>%  
+  step_smote(death, over_ratio = 1)
+
+rec_log_smote <- rec_log %>% 
+  step_smote(death, over_ratio = 1)
+
 ```
 Check variable ranges after normalization
 ```{r}
@@ -263,3 +278,9 @@ final_svm <- finalize_workflow(wf %>% add_model(tune_svm),
 last_fit(final_svm, hf_split, metrics = met) %>% 
   collect_metrics()
 ```
+
+## Xgboost
+```{r}
+tune_xgb <- xgb
+```
+
