@@ -96,16 +96,16 @@ ggplot(hf_train, aes(as.factor(smoking), fill = death)) +
 ```
 
 
-## Model
+## Model recipes
 ```{r recipe}
 rec_norm <- recipe(death ~ ., data = hf_train) %>% 
-  step_normalize(all_predictors) 
+  step_normalize(c(creatinine_phosphokinase, serum_creatinine, platelets, age, serum_sodium, time, ejection_fraction, creatinine_phosphokinase)) 
 
 rec_log <- recipe(death ~ ., data = hf_train) %>% 
   step_log(c(creatinine_phosphokinase, serum_creatinine)) %>% 
   step_normalize(c(platelets, age, serum_sodium, time, ejection_fraction, creatinine_phosphokinase)) %>% 
  
-rec_norm_smote <- rec_norm_all %>%  
+rec_norm_smote <- rec_norm %>%  
   step_smote(death)
 
 rec_log_smote <- rec_log %>% 
@@ -132,17 +132,8 @@ Check variable ranges after normalization
 hf_prep <- prep(hf_recipe)
 juiced <- juice(hf_prep)
 summary(juiced)
-
-# check ratio of target variable before and after upsampling
-tibble("before" = hf_train %>%
-         count(death) %>%
-         mutate(prop = n * 100 / sum(n)),
-       "after" = juiced %>%
-         count(death) %>%
-         mutate(prop = n * 100 / sum(n)),
-)
 ```
-
+### Model specs
 ```{r model_specs}
 lasso_spec <- logistic_reg(
   penalty = tune(), 
@@ -150,7 +141,7 @@ lasso_spec <- logistic_reg(
   engine = "glmnet")
 
 rf_spec <- rand_forest(
-  trees = 100, 
+  trees = 1000, 
   mtry = tune(), 
   min_n = tune(),
   mode = "classification",
@@ -185,14 +176,12 @@ xg_spec <- boost_tree(
   loss_reduction = tune(),
   min_n = tune(), 
   sample_size = tune(), 
-  trees = tune(),
+  trees = 100,
   mode = "classification", 
   engine = "xgboost"
 )
-
 ```
-
-
+ Create Workflow set
 ```{r workflow}
 comp_models <-
   workflow_set(
@@ -213,15 +202,17 @@ comp_models <-
                   knn = knn_spec,
                   xg = xg_spec),
     cross = TRUE
-  )
+  ) %>% 
+  workflow_map("fit_resamples", 
+               seed = 2024, 
+               verbose = \TRUE,
+               resamples = train_folds,
+               control = keep_pred)
 
 comp_models
-
-wf <- workflow() %>% 
-  add_recipe(hf_recipe)
 ```
 
-```{r}
+```{r metrics}
 met <- metric_set(roc_auc, mcc, precision)
 ```
 
