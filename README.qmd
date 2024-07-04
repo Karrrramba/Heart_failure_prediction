@@ -86,15 +86,32 @@ hf_train %>%
 
 ```{r}
 hf_train %>% 
-  group_by(death) %>% 
-  normality() %>% 
-  flextable() 
-```
-```{r}
-hf_train %>% 
-  plot_normality()
+  plot_normality(col = "#D53E4F")
 ```
 
+```{r}
+hf_train %>% 
+  plot_normality(left = "Box-Cox", right = "1/x", col = "#D53E4F")
+```
+
+- log-transform: age, creatinin_phospokinase, ejection_fraction, platelets, serum_sodium, time?
+- box-cox: serum_creatinine, time?
+
+```{r}
+preds_transformed <- recipe(death ~ ., data = hf_train) %>% 
+  step_YeoJohnson(all_numeric_predictors()) %>% 
+  prep() %>% 
+  juice()
+
+preds_transformed %>% 
+  plot_normality()
+
+  ggplot(data = preds_transformed, aes(x = serum_creatinine)) +
+  geom_histogram(bins = 15, col = "darkred", fill = "#D53E4F") +
+  xlab("Serum Creatinine") +
+  ylab("Frequency")
+  theme_bw()
+```
 
 ```{r eda_barplots}
 facet_var = 
@@ -143,6 +160,7 @@ rec_norm <- recipe(death ~ ., data = hf_train) %>%
 
 rec_log <- recipe(death ~ ., data = hf_train) %>% 
   step_log(c(creatinine_phosphokinase, serum_creatinine)) %>% 
+  step_BoxCox()
   step_normalize(c(platelets, age, serum_sodium, time, ejection_fraction, creatinine_phosphokinase))
  
 rec_norm_smote <- rec_norm %>%  
