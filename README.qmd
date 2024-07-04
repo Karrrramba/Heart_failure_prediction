@@ -11,7 +11,9 @@ The data was retrieved from the [UC Irvine Machine Learning Repository](https://
 
 ```{r packages}
 #| output: false
+library(dlookr) 
 library(doParallel)
+library(flextable)
 library(GGally)
 library(gridExtra)
 library(gt)
@@ -28,14 +30,13 @@ hf <- read.csv("data/heart_failure_clinical_records_dataset.csv")
 ```
 
 ```{r skim}
-str(hf)
 skim(hf)
 ```
 
 ```{r target_var}
 hf <- hf %>% 
   rename(death = DEATH_EVENT) %>% 
-  mutate(death = as.factor(death))
+  mutate(across(c(anaemia, diabetes, high_blood_pressure, sex, smoking, death), as.factor))
 ```
 
 ```{r splits}
@@ -54,9 +55,46 @@ train_folds <- vfold_cv(hf_train, v = 10, repeats = 5)
 theme_set(theme_minimal())
 
 hf_train %>% 
-  mutate(across(c(sex, smoking, anaemia, diabetes, high_blood_pressure), ~ as.factor(.))) %>% 
   ggpairs(switch = "y")
 ```
+```{r}
+hf_train %>% 
+  group_by(death) %>% 
+  diagnose_category() %>% 
+  flextable()
+```
+
+```{r}
+hf_train %>% 
+  diagnose_numeric() %>% 
+  flextable()
+```
+
+```{r}
+hf_train %>% 
+  group_by(death) %>% 
+  diagnose_outlier() %>% 
+  flextable()
+```
+
+
+```{r}
+hf_train %>% 
+  normality() %>% 
+  flextable()
+```
+
+```{r}
+hf_train %>% 
+  group_by(death) %>% 
+  normality() %>% 
+  flextable() 
+```
+```{r}
+hf_train %>% 
+  plot_normality()
+```
+
 
 ```{r eda_barplots}
 facet_var = 
@@ -101,7 +139,7 @@ ggplot(hf_train, aes(as.factor(smoking), fill = death)) +
 ## Model recipes
 ```{r recipe}
 rec_norm <- recipe(death ~ ., data = hf_train) %>% 
-  step_normalize(c(creatinine_phosphokinase, serum_creatinine, platelets, age, serum_sodium, time, ejection_fraction, creatinine_phosphokinase)) 
+  step_normalize(all_numeric_predictors()) 
 
 rec_log <- recipe(death ~ ., data = hf_train) %>% 
   step_log(c(creatinine_phosphokinase, serum_creatinine)) %>% 
@@ -178,7 +216,8 @@ xg_spec <- boost_tree(
   engine = "xgboost"
 )
 ```
- Create Workflow set
+
+Create Workflow set
 ```{r workflow}
 comp_models <-
   workflow_set(
@@ -204,7 +243,7 @@ comp_models <-
                seed = 2024, 
                verbose = TRUE,
                resamples = train_folds,
-               control = keep_pred)
+               control = "keep_pred")
 
 comp_models
 ```
