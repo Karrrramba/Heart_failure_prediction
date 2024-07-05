@@ -14,7 +14,8 @@ The data was retrieved from the [UC Irvine Machine Learning Repository](https://
 library(dlookr) 
 library(doParallel)
 library(flextable)
-library(GGally)
+library(ggstatsplot)
+library(glmnet)
 library(gridExtra)
 library(gt)
 library(renv)
@@ -37,7 +38,7 @@ skim(hf)
 hf <- hf %>% 
   rename(death = DEATH_EVENT) %>% 
   mutate(across(c(anaemia, diabetes, high_blood_pressure, sex, smoking, death), as.factor)) %>% 
-  mutate(death = fct_recode(death, deceased = "1", alive = "1"))
+  mutate(death = fct_recode(death, deceased = "1", alive = "0"))
 ```
 
 ```{r splits}
@@ -54,9 +55,6 @@ train_folds <- vfold_cv(hf_train, v = 10, repeats = 5)
 ```{r ggpairs}
 #| message: false
 theme_set(theme_minimal())
-
-hf_train %>% 
-  ggpairs(switch = "y")
 ```
 
 ```{r summarystats_cat}
@@ -132,14 +130,21 @@ preds_transformed %>%
   flextable()
 ```
 
-```{r}
-n_vars_train <- hf_train %>% select(where(is.numeric))
-n_vars_trans <- preds_transformed %>% select(where(is.numeric))
+```{r boxplots}
+for (i in hf_train %>% select(where(is.numeric)) %>% names()){
+  print(
+    ggplot(data = hf_train, aes(x = death, y = !!sym(i))) +
+      geom_boxplot(aes(fill = death)) +
+      xlab("Death") +
+      ylab(i) +
+      ggtitle(paste(i, "by death before transformation")) +
+      theme_bw() +
+      theme(legend.position = "none")
+    )
+}
 
-preds_transformed %>% 
-  group_by(death) %>% 
-  
 ```
+Serum creatinine, time
 
 ### Categorical variables
 
@@ -156,6 +161,62 @@ hf_train %>%
     output_format = "html"
   )
 ```
+
+
+### Test predictive value
+```{r }
+evaluate_model <- function(model, data) {
+  # Perform 10-fold cross-validation
+  cv_results <- model %>%
+    rsample::cross_val(metric = "roc_auc", folds = 10)
+  
+  # Calculate average ROC AUC
+  mean_auc <- cv_results %>%
+    summarise(mean_auc = mean(estimate))
+  
+  return(mean_auc)
+}
+
+# Function to test variable importance
+test_vars <- function(df, target,  variable) {
+  
+  model <- logistic_reg() %>% 
+    set_engine("glm")
+  
+  # null_formula <- as.formula(paste0(target, " ~ 1"))
+  # 
+  # null_model <- workflow(null_formula, model) %>%
+  #   fit(data = df)
+  null_model = glm(formula = target ~ 1, data = df, family = binomial(link = "logit"))
+  
+  alt_formula <- as.formula(paste0(target, " ~ ", variable))
+  
+  alt_model <- workflow(alt_formula, model) %>%
+    fit(data = df)
+  
+  
+  # Evaluate both models
+  null_auc <- evaluate_model(null_model, df)
+  model_auc <- evaluate_model(model, df)
+  
+  # Calculate improvement in ROC AUC
+  improvement <- model_auc - null_auc
+  
+  # Calculate t-statistic for improvement
+  t_stat <- (improvement * sqrt(10)) / sqrt(2 * (1 - improvement)^2)
+  
+  return(c(variable = variable, delta_auc = improvement, t_statistic = t_stat))
+}
+
+# Loop through each variable
+variable_results <- lapply(names(hf_train)[-which(names(hf_train) == "death")], 
+                           FUN = test_vars, df = hf_train, target = "death")
+
+variable_results <- do.call(rbind, variable_results)
+
+variable_results
+```
+
 
 EDA summary: - no missing values - outliers are not - no strong correlations - weak correlations for age:serum creatinine and serum sodium:serum creatinine (negative)
 
