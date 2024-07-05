@@ -26,7 +26,7 @@ library(vip)
 ```
 
 ```{r data}
-hf <- read.csv("data/heart_failure_clinical_records_dataset.csv")
+hf <- read.csv("../data/heart_failure_clinical_records_dataset.csv")
 ```
 
 ```{r skim}
@@ -36,7 +36,8 @@ skim(hf)
 ```{r target_var}
 hf <- hf %>% 
   rename(death = DEATH_EVENT) %>% 
-  mutate(across(c(anaemia, diabetes, high_blood_pressure, sex, smoking, death), as.factor))
+  mutate(across(c(anaemia, diabetes, high_blood_pressure, sex, smoking, death), as.factor)) %>% 
+  mutate(death = fct_recode(death, deceased = "1", alive = "1"))
 ```
 
 ```{r splits}
@@ -57,68 +58,116 @@ theme_set(theme_minimal())
 hf_train %>% 
   ggpairs(switch = "y")
 ```
-```{r}
+
+```{r summarystats_cat}
 hf_train %>% 
   group_by(death) %>% 
   diagnose_category() %>% 
   flextable()
 ```
 
-```{r}
+### Numeric variables
+
+```{r summarystats_numeric}
 hf_train %>% 
   diagnose_numeric() %>% 
   flextable()
 ```
 
-```{r}
+```{r outliers}
 hf_train %>% 
   group_by(death) %>% 
   diagnose_outlier() %>% 
   flextable()
 ```
 
-
-```{r}
+```{r normality_stats}
 hf_train %>% 
   normality() %>% 
   flextable()
 ```
 
-```{r}
+```{r normality_plots}
 hf_train %>% 
   plot_normality(col = "#D53E4F")
-```
-
-```{r}
 hf_train %>% 
   plot_normality(left = "Box-Cox", right = "1/x", col = "#D53E4F")
 ```
 
-- log-transform: age, creatinin_phospokinase, ejection_fraction, platelets, serum_sodium, time?
-- box-cox: serum_creatinine, time?
-
-```{r}
+```{r numeric_transformations}
 preds_transformed <- recipe(death ~ ., data = hf_train) %>% 
-  step_YeoJohnson(all_numeric_predictors()) %>% 
+  step_YeoJohnson(time, platelets, serum_creatinine) %>%
+  step_log(creatinine_phosphokinase, ejection_fraction) %>%
+  step_sqrt(age, time) %>%
+  step_scale(all_numeric_predictors()) %>% 
   prep() %>% 
   juice()
 
 preds_transformed %>% 
-  plot_normality()
-
-  ggplot(data = preds_transformed, aes(x = serum_creatinine)) +
-  geom_histogram(bins = 15, col = "darkred", fill = "#D53E4F") +
-  xlab("Serum Creatinine") +
-  ylab("Frequency")
-  theme_bw()
+  plot_normality() 
 ```
 
+```{r corrplot}
+preds_transformed %>% 
+  plot_correlate(method = "pearson")
+```
+
+```{r}
+preds_transformed %>% 
+  group_by(death) %>% 
+  plot_correlate()
+```
+
+When grouped by death the correlations between the numeric variables increase: age:creatinine phoshphokinase (weak positive) age:ejection fraction (weak negative) age:time (weak positive) creatinine phosphokinase:time (weak positive) creatinine phosphokinase:serum creatinin (weak positive) serum creatinine:serum sodium (mid negative)
+
+```{r}
+hf_train %>% 
+  group_by(death) %>% 
+  diagnose_outlier() %>% 
+  flextable()
+
+preds_transformed %>% 
+  group_by(death) %>% 
+  diagnose_outlier() %>% 
+  flextable()
+```
+
+```{r}
+n_vars_train <- hf_train %>% select(where(is.numeric))
+n_vars_trans <- preds_transformed %>% select(where(is.numeric))
+
+preds_transformed %>% 
+  group_by(death) %>% 
+  
+```
+
+### Categorical variables
+
+```{r chi-squared}
+hf_train %>% 
+  group_by(death) %>% 
+  compare_category()
+```
+
+```{r}
+hf_train %>% 
+  eda_web_report(
+    target = "death", 
+    output_format = "html"
+  )
+```
+
+EDA summary: - no missing values - outliers are not - no strong correlations - weak correlations for age:serum creatinine and serum sodium:serum creatinine (negative)
+
 ```{r eda_barplots}
-facet_var = 
-ggplot(hf_train, aes(as.factor(smoking), fill = death)) +
+ggplot(hf_train, aes(smoking, fill = death)) +
   geom_bar() +
-  facet_wrap(~anaemia)
-  facet_wrap(~as.factor(anaemia))
+  facet_wrap(~anaemia) + 
+  xlab("Smoking") +
+  ylab("Count") +
+  theme_bw() +
+  theme(legend.position = "none")
+  
 ```
 
 ```{r eda_boxplots}
@@ -127,7 +176,7 @@ ggplot(hf_train, aes(as.factor(smoking), fill = death)) +
   select(where(~is.numeric(.) && max(.) > 1)) %>%
   names()
 
- cat_vars <- hf_train %>% 
+  cat_vars <- hf_train %>% 
   select(where(~is.numeric(.) && max(.) == 1)) %>% 
   names()
  
@@ -152,8 +201,8 @@ ggplot(hf_train, aes(as.factor(smoking), fill = death)) +
 # }
 ```
 
-
 ## Model recipes
+
 ```{r recipe}
 rec_norm <- recipe(death ~ ., data = hf_train) %>% 
   step_normalize(all_numeric_predictors()) 
@@ -187,6 +236,7 @@ rec_ls_poly <-  rec_log_smote %>%
 ```
 
 ### Model specs
+
 ```{r model_specs}
 lasso_spec <- logistic_reg(
   penalty = tune(), 
@@ -236,6 +286,7 @@ xg_spec <- boost_tree(
 ```
 
 Create Workflow set
+
 ```{r workflow}
 comp_models <-
   workflow_set(
@@ -301,6 +352,7 @@ lasso_grid %>%
 ```
 
 Extract best-performing model
+
 ```{r}
 lasso_grid %>% select_best("precision")
 lasso_grid %>% select_best("roc_auc")
@@ -321,6 +373,7 @@ last_fit(final_lasso, hf_split, metrics = met) %>%
 ```
 
 ### Variable importance
+
 ```{r}
 final_lasso %>% 
   fit(hf_train) %>% 
@@ -333,6 +386,7 @@ final_lasso %>%
 ```
 
 ## Random forest
+
 ```{r rf_tune}
 rf_grid <- tune_grid(
   add_model(wf, tune_rf),
@@ -364,6 +418,7 @@ last_fit(final_rf, hf_split, metrics = met) %>%
 ```
 
 ## Support vector machines
+
 ```{r}
 svm_grid <- tune_grid(
   add_model(wf, tune_svm),
@@ -393,4 +448,3 @@ final_svm <- finalize_workflow(wf %>% add_model(tune_svm),
 last_fit(final_svm, hf_split, metrics = met) %>% 
   collect_metrics()
 ```
-
