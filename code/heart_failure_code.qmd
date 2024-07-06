@@ -189,63 +189,79 @@ hf_train %>%
   )
 ```
 
-
-### Test predictive value
-```{r }
-
+### Feature selection
+```{r}
 set.seed(16633)
-class(hf_train$death)
+results <- data.frame(Predictor = preds_transformed %>% select(where(is.numeric)) %>% names(),
+                      Improvement = as.numeric(NA),
+                      Pvalue = NA,
+                      ROC_AUC = as.numeric(NA),
+                      stringsAsFactors = FALSE
+                      )
 
-evaluate_model <- function(model, data) {
+for (i in 1:nrow(results)) {
 
-  cv_results <- model %>%
-    vfold_cv(metric = "roc_auc", folds = 10)
-
-  mean_auc <- cv_results %>%
-    summarise(mean_auc = mean(estimate))
+  null_rec <- recipe(death ~  1, data = preds_transformed)
+  alt_rec <- recipe(death ~ ., data = preds_transformed[, c("death", results$Predictor[i])])
   
-  return(mean_auc)
+  preproc <- list(
+    alt = alt_rec,
+    null = null_rec
+    )
+  
+  glm_models <- workflow_set(preproc, list(glm = logistic_reg() %>% set_engine("glm")), cross = FALSE)
+  
+  glm_models <- glm_models %>% 
+    workflow_map("fit_resamples",
+                 seed = 8960, 
+                 verbose = F,
+                 resamples = train_folds)
+  
+  model_metrics <- collect_metrics(glm_models, summarize = TRUE) %>% 
+    filter(.metric == "roc_auc")
+  print(model_metrics)
+  test_res <- t.test(model_metrics$mean, alternative = "greater")
+  
+  results$Improvement[i] <- model_metrics[1, 'mean'] - model_metrics[2, 'mean']
+  results$Pvalue[i] <- test_res$p.value
+  results$ROC_AUC[i] <- model_metrics[1, 'mean']
+
 }
 
-# Function to test variable importance
-test_vars <- function(df, target,  variable) {
-  
-  model <- logistic_reg() %>% 
-    set_engine("glm")
-  
-  # null_formula <- as.formula(paste0(target, " ~ 1"))
-  # 
-  # null_model <- workflow(null_formula, model) %>%
-  #   fit(data = df)
-  null_model = glm(formula = as.factor(target) ~ 1, data = df, family = binomial(link = "logit"))
-  
-  alt_formula <- as.formula(paste0(target, " ~ ", variable))
-  
-  alt_model <- workflow(alt_formula, model) %>%
-    fit(data = df)
-  
+results[, c("Improvement", "ROC_AUC")] <- sapply(results[, c("Improvement", "ROC_AUC")], unlist)
 
-  null_auc <- evaluate_model(null_model, df)
-  model_auc <- evaluate_model(model, df)
-  
-  # Calculate improvement in ROC AUC
-  improvement <- model_auc - null_auc
-  
-  # Calculate t-statistic for improvement
-  t_stat <- (improvement * sqrt(10)) / sqrt(2 * (1 - improvement)^2)
-  
-  return(c(variable = variable, delta_auc = improvement, t_statistic = t_stat))
-}
-
-# Loop through each variable
-variable_results <- lapply(names(hf_train[, sapply(hf_train, is.factor)])[-which(names(hf_train) == "death")], 
-                           FUN = test_vars, df = hf_train, target = "death")
-
-variable_results <- do.call(rbind, variable_results)
-
-variable_results
+results %>% 
+  arrange(Pvalue)
 ```
 
+```{r}
+
+null_rec <- recipe(death ~  1, data = preds_transformed)
+  
+alt_rec <- recipe(death ~ platelets, data = preds_transformed)
+
+preproc <- list(null = null_rec,
+                alt = alt_rec)
+
+glm_models <- workflow_set(preproc, list(glm = logistic_reg() %>% set_engine("glm")), cross = FALSE)
+
+glm_models <- glm_models %>% 
+  workflow_map("fit_resamples",
+               seed = 8960, verbose = T,
+               resamples = train_folds)
+
+mod_metrics <- collect_metrics(glm_models, summarize = FALSE) %>% 
+  filter(.metric == "roc_auc")
+
+mod_metrics_wider <- mod_metrics %>% 
+  select(wflow_id, .estimate, id) %>% 
+  pivot_wider(id_cols = "id", names_from = "wflow_id", values_from = ".estimate")
+
+compare_models <- mod_metrics_wider %>% 
+  mutate(across(c(alt_glm, null_glm), unlist))
+  mutate(difference = alt_glm - null_glm)
+
+```
 
 EDA summary: - no missing values - outliers are not - no strong correlations - weak correlations for age:serum creatinine and serum sodium:serum creatinine (negative)
 
