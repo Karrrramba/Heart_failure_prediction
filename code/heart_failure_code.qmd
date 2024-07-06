@@ -11,19 +11,22 @@ The data was retrieved from the [UC Irvine Machine Learning Repository](https://
 
 ```{r packages}
 #| output: false
+#| warning: false
 library(dlookr) 
-library(doParallel)
+# library(doParallel)
 library(flextable)
 library(ggstatsplot)
 library(glmnet)
 library(gridExtra)
-library(gt)
-library(renv)
+# library(gt)
+library(patchwork)
+# library(renv)
 library(skimr)
 library(themis)
 library(tidymodels)
 library(tidyverse)
 library(vip)
+tidymodels_prefer()
 ```
 
 ```{r data}
@@ -37,8 +40,7 @@ skim(hf)
 ```{r target_var}
 hf <- hf %>% 
   rename(death = DEATH_EVENT) %>% 
-  mutate(across(c(anaemia, diabetes, high_blood_pressure, sex, smoking, death), as.factor)) %>% 
-  mutate(death = fct_recode(death, deceased = "1", alive = "0"))
+  mutate(across(c(anaemia, diabetes, high_blood_pressure, sex, smoking, death), as.factor))
 ```
 
 ```{r splits}
@@ -94,10 +96,12 @@ hf_train %>%
 
 ```{r numeric_transformations}
 preds_transformed <- recipe(death ~ ., data = hf_train) %>% 
-  step_YeoJohnson(time, platelets, serum_creatinine) %>%
-  step_log(creatinine_phosphokinase, ejection_fraction) %>%
-  step_sqrt(age, time) %>%
-  step_scale(all_numeric_predictors()) %>% 
+  step_normalize(all_numeric_predictors()) %>% 
+  step_YeoJohnson(all_numeric_predictors()) %>%
+  # step_YeoJohnson(time, platelets, serum_creatinine, creatinine_phosphokinase, serum_sodium) %>%
+  # step_log(, ejection_fraction) %>%
+  # step_sqrt(age, time) %>%
+  # step_scale(all_numeric_predictors()) %>% 
   prep() %>% 
   juice()
 
@@ -146,13 +150,36 @@ for (i in hf_train %>% select(where(is.numeric)) %>% names()){
 ```
 Serum creatinine, time
 
+```{r scatterplots}
+  dlookr::univar_numeric(hf_train)
+```
+
+
 ### Categorical variables
 
 ```{r chi-squared}
-hf_train %>% 
-  group_by(death) %>% 
-  compare_category()
+chi <- function(x, y){
+  test <- chisq.test(table(x, y))
+  res <- c(test$statistic, test$p.value,
+           sign(table(x, y)))
+}
+
+apply(combn(1:ncol()))
 ```
+
+```{r}
+cat_vars <- hf_train %>% select(where(is.factor)) %>% names()
+
+
+for(i in hf_train %>% select(where(is.factor))) {
+  ggbarstats(
+    data = hf_train,
+    x = i,
+    y = j
+  )
+}
+```
+
 
 ```{r}
 hf_train %>% 
@@ -165,12 +192,15 @@ hf_train %>%
 
 ### Test predictive value
 ```{r }
+
+set.seed(16633)
+class(hf_train$death)
+
 evaluate_model <- function(model, data) {
-  # Perform 10-fold cross-validation
+
   cv_results <- model %>%
-    rsample::cross_val(metric = "roc_auc", folds = 10)
-  
-  # Calculate average ROC AUC
+    vfold_cv(metric = "roc_auc", folds = 10)
+
   mean_auc <- cv_results %>%
     summarise(mean_auc = mean(estimate))
   
@@ -187,15 +217,14 @@ test_vars <- function(df, target,  variable) {
   # 
   # null_model <- workflow(null_formula, model) %>%
   #   fit(data = df)
-  null_model = glm(formula = target ~ 1, data = df, family = binomial(link = "logit"))
+  null_model = glm(formula = as.factor(target) ~ 1, data = df, family = binomial(link = "logit"))
   
   alt_formula <- as.formula(paste0(target, " ~ ", variable))
   
   alt_model <- workflow(alt_formula, model) %>%
     fit(data = df)
   
-  
-  # Evaluate both models
+
   null_auc <- evaluate_model(null_model, df)
   model_auc <- evaluate_model(model, df)
   
@@ -209,7 +238,7 @@ test_vars <- function(df, target,  variable) {
 }
 
 # Loop through each variable
-variable_results <- lapply(names(hf_train)[-which(names(hf_train) == "death")], 
+variable_results <- lapply(names(hf_train[, sapply(hf_train, is.factor)])[-which(names(hf_train) == "death")], 
                            FUN = test_vars, df = hf_train, target = "death")
 
 variable_results <- do.call(rbind, variable_results)
